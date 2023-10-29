@@ -1,8 +1,8 @@
 # Installation 
-1.Install ROS: <br/>
-http://wiki.ros.org/ROS/Tutorials/InstallingandConfiguringROSEnvironment <br/>
-Install simulation: </br>
-https://emanual.robotis.com/docs/en/platform/turtlebot3/simulation/
+1. Install ROS: <br/>
+  http://wiki.ros.org/ROS/Tutorials/InstallingandConfiguringROSEnvironment <br/>
+2. Install simulation: </br>
+  https://emanual.robotis.com/docs/en/platform/turtlebot3/simulation/
 # Create package
 ```bash
 cd ~/catkin_ws/src
