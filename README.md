@@ -30,6 +30,6 @@ New terminal: Drive robot
 cd ~/catkin_ws
 source ~/catkin_ws/devel/setup.bash
 rosrun turtlebot3drive point2point.py [x] [y] [theta]
-```bash
+```
 
 
