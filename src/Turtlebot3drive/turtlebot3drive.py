@@ -1,5 +1,6 @@
 import rospy
 import math
+import time
 from geometry_msgs.msg import *
 from nav_msgs.msg import Odometry
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
@@ -7,7 +8,6 @@ from tf.transformations import euler_from_quaternion as efq
 
 Kp_v = 2
 Kp_w = 8
-x, y, theta = 0, 0, 0
 virtual_distance = 1
 linear_goal_error = 0.01
 angular_goal_error = 0.1
@@ -22,7 +22,7 @@ class Turtlebot3_drive:
         rospy.Subscriber("/odom", Odometry, self.update_pose_callback)
         self.velo_control = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
         self.set_goal = rospy.Publisher("move_base_simple/goal", PoseStamped, queue_size = 10)
-        rospy.Subscriber("move_base_simple/goal", PoseStamped, self.set_goal_callback)
+        rospy.Subscriber("move_base_simple/goal", PoseStamped, self.__set_goal_callback)
     
     def update_pose_callback(self, msg):
         '''Update robot's pose'''
@@ -33,10 +33,32 @@ class Turtlebot3_drive:
                            msg.pose.pose.orientation.z, 
                            msg.pose.pose.orientation.w], 
                            'sxyz')
-        
-    def set_goal_callback(self, msg):
-        # TODO:
+    
+    def __set_goal_callback(self, msg):
         frame_ID = msg.header.frame_id 
+        _, _, self.robot_goal.theta  = efq([msg.pose.pose.orientation.x, 
+                           msg.pose.pose.orientation.y, 
+                           msg.pose.pose.orientation.z, 
+                           msg.pose.pose.orientation.w], 
+                           'sxyz')
+        self.robot_goal.x = msg.pose.position.x
+        self.robot_goal.y = msg.pose.position.y
+        
+    def move_by_trajectory(self, trajectory):
+        '''Control robot by trajectory.
+        
+        pose is a function map t -> (x, y, theta)
+        '''
+        #Move to starting point of trajectory
+        pose = pose_f(0)
+        self.point_to_point(pose)
+
+
+
+    def pass_pose(self, pose):
+        '''Pass over pose'''
+
+     
 
     def point_to_point(self, goal):
         '''Control robot move to goal.
@@ -90,7 +112,7 @@ class Turtlebot3_drive:
         K_w, constrained_angular_velo = self.__get_constrain(angular_velocity, 
                                                              -MAX_ANG_VELOCITY, MAX_ANG_VELOCITY)
     
-        control_vector = control_vector = Twist()
+        control_vector = Twist()
         if K_l < K_w:
             control_vector.linear.x = constrained_linear_velo
             control_vector.angular.z = angular_velocity*K_l 
