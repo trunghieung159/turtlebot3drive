@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import rospy
 import sys
+from geometry_msgs.msg import *
 from Turtlebot3drive.turtlebot3drive import Turtlebot3_drive 
 if __name__ == '__main__':
     try:
@@ -10,13 +11,17 @@ if __name__ == '__main__':
             pass
         else:
             turtlebot3 = Turtlebot3_drive(10)
+            #stablize the odometry
+            rospy.sleep(1)
             if len(argv) == 3:
                 print("target (x, y):", argv[1], argv[2])
-                turtlebot3.point_to_point((float(argv[1]), float(argv[2])))
-                print("ok")
+                goal = Pose2D(float(argv[1]), float(argv[2]), None)
+                has_theta = False
             else:
                 print("target (x, y, theta):", argv[1], argv[2], argv[3])
-                turtlebot3.point_to_point((float(argv[1]), float(argv[2]), float(argv[3])))
-                print("ok")
+                goal = Pose2D(float(argv[1]), float(argv[2]), float(argv[3]))
+                has_theta = True 
+            turtlebot3.point_to_point(goal, has_theta)
+            print("ok")
     except rospy.ROSInterruptException:
         pass

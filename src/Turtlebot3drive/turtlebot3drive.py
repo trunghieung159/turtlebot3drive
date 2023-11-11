@@ -1,10 +1,12 @@
 import rospy
 import math
 import time
+from threading import Thread
 from geometry_msgs.msg import *
 from nav_msgs.msg import Odometry
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from tf.transformations import euler_from_quaternion as efq
+from tf.transformations import quaternion_from_euler as qfe
 
 Kp_v = 2
 Kp_w = 8
@@ -16,96 +18,131 @@ MAX_ANG_VELOCITY = 2.84
 
 class Turtlebot3_drive:
     def __init__(self, control_freq = 10):
-        self.x, self.y, self.theta = 0, 0, 0
+        self.control_freq = control_freq
+        self.robot_pose = Pose2D()
+        self.goal_pose = Pose2D()
         rospy.init_node('turtlebot3', anonymous=True)
-        self.rate = rospy.Rate(control_freq)
-        rospy.Subscriber("/odom", Odometry, self.update_pose_callback)
-        self.velo_control = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
-        self.set_goal = rospy.Publisher("move_base_simple/goal", PoseStamped, queue_size = 10)
-        rospy.Subscriber("move_base_simple/goal", PoseStamped, self.__set_goal_callback)
-    
-    def update_pose_callback(self, msg):
-        '''Update robot's pose'''
 
-        self.x, self.y = msg.pose.pose.position.x, msg.pose.pose.position.y 
-        _, _, self.theta = efq([msg.pose.pose.orientation.x, 
+        self.rate = rospy.Rate(control_freq)
+        rospy.Subscriber("/odom", Odometry, self.update_robot_pose_callback)
+        self.velo_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
+        self.set_goal_pub = rospy.Publisher("move_base_simple/goal_pose", PoseStamped, queue_size = 10)
+        rospy.Subscriber("move_base_simple/goal_pose", PoseStamped, self.__receive_goal_callback)
+        ## stablize the odometry
+    
+    def update_robot_pose_callback(self, msg):
+        '''Update robot's pose'''
+        self.robot_pose.x, self.robot_pose.y = msg.pose.pose.position.x, msg.pose.pose.position.y 
+        _, _, self.robot_pose.theta = efq([msg.pose.pose.orientation.x, 
                            msg.pose.pose.orientation.y, 
                            msg.pose.pose.orientation.z, 
                            msg.pose.pose.orientation.w], 
                            'sxyz')
     
-    def __set_goal_callback(self, msg):
+    def __receive_goal_callback(self, msg):
         frame_ID = msg.header.frame_id 
-        _, _, self.robot_goal.theta  = efq([msg.pose.pose.orientation.x, 
-                           msg.pose.pose.orientation.y, 
-                           msg.pose.pose.orientation.z, 
-                           msg.pose.pose.orientation.w], 
+        _, _, self.goal_pose.theta  = efq([msg.pose.orientation.x, 
+                           msg.pose.orientation.y, 
+                           msg.pose.orientation.z, 
+                           msg.pose.orientation.w], 
                            'sxyz')
-        self.robot_goal.x = msg.pose.position.x
-        self.robot_goal.y = msg.pose.position.y
+        self.goal_pose.x = msg.pose.position.x
+        self.goal_pose.y = msg.pose.position.y
         
+    def __send_goal(self, trajectory):
+        '''Update goal_pose  by trajectory regularly with time step delta_t = 1/f
+        
+        '''
+        delta_t = 1 / self.control_freq
+        interval = 1
+        totalIntervals = trajectory.period / delta_t
+        pose_f = trajectory.pose_f
+        rate = rospy.Rate(self.control_freq)
+        while interval <= totalIntervals:
+            pose = pose_f(interval * delta_t)
+            q = qfe(pose.x, pose.y, pose.theta)
+            msg = PoseStamped()
+            msg.pose.orientation.x,  msg.pose.orientation.y = q[0], q[1]
+            msg.pose.orientation.z, msg.pose.orientation.w = q[2], q[3]
+
+            msg.pose.position = Point(pose.x, pose.y, 0)
+            interval += 1
+            self.set_goal_pub.publish(msg)
+            rate.sleep()
+            
+            
+
     def move_by_trajectory(self, trajectory):
         '''Control robot by trajectory.
         
         pose is a function map t -> (x, y, theta)
         '''
         #Move to starting point of trajectory
-        pose = pose_f(0)
-        self.point_to_point(pose)
+        pose_f = trajectory.pose_f
+        goal_pose = pose_f(0)
+        self.point_to_point(goal_pose, trajectory.has_theta)
+        delta_t = 1 / self.control_freq
+        interval, total_intervals = 1, trajectory.period / delta_t
+        while interval <= total_intervals:
+            goal_pose = pose_f(interval * delta_t)
+            self.rate.sleep()
+            self.approach_goal(goal_pose, trajectory.has_theta)
+            interval += 1
+        self.point_to_point(goal_pose, trajectory.has_theta)
+        self.velo_control(0, 0)
 
-
-
-    def pass_pose(self, pose):
-        '''Pass over pose'''
-
-     
-
-    def point_to_point(self, goal):
-        '''Control robot move to goal.
+    def point_to_point(self, goal_pose, has_theta = True):
+        '''Control robot move to goal_pose.
         
-        goal can either be in (x, y) or (x, y, theta) form
+        goal_pose can either be in (x, y) or (x, y, theta) form
         '''
-        if(len(goal) == 2):
-            while self.get_distance(goal) > linear_goal_error:
-                self.pid_point2point(goal)
-                self.rate.sleep()
-        else:
-            mode = "far_from_goal"
-            while (self.get_distance(goal) > linear_goal_error or 
-                abs(self.theta - goal[2]) > angular_goal_error):
-                if(self.get_distance(goal) < 1):
-                    mode = "near_goal"
-
-                #rotate case (robot is put closely to the goal at init time):
-                if(self.get_distance(goal) < linear_goal_error):
-                    while abs(self.theta - goal[2]) > angular_goal_error:
-                        self.control_robot(0, Kp_w*(goal[2] - self.theta))
-                        self.rate.sleep()
-                    break
-
-                if mode == "near_goal":
-                    temporary_goal = self.get_virtual_goal(goal)
-                else:
-                    temporary_goal = goal 
-                self.pid_point2point(temporary_goal)
-                self.rate.sleep()
+        while not self.is_at_goal(goal_pose, has_theta):
+            self.approach_goal(goal_pose, has_theta)
+            self.rate.sleep()    
         #Stop control        
-        self.control_robot(0, 0)
-                
-    def pid_point2point(self, goal):
-        '''Use PID control to approach goal(x, y)
-        without considering robot's angular at that target'''
-        linear_velo = Kp_v * self.get_distance(goal)
-        angular_velo = Kp_w * self.get_delta_theta(goal)
-        self.control_robot(linear_velo, angular_velo)
-        return 
+        self.velo_control(0, 0)
 
-    def control_robot(self, linear_velocity, angular_velocity):
-        '''Control robot by linear velocity and angular velocity.
+    def approach_goal(self, goal_pose, has_theta = True):
+        '''Determine and control robot to approach goal_pose.
+        
+        goal_pose can either be in (x, y) or (x, y, theta) form,
+        need to rerun function or reset velocity after function finishes
+        '''
+        if(not has_theta):
+            self.pid_control(goal_pose)
+        else:
+            ## Self-rotate case
+            ## (unable to determine delta_theta) (robot is at the target(x, y) 
+            ## but with different theta initially)
+            if(self.get_distance(goal_pose) < linear_goal_error):
+                self.velo_control(0, Kp_w*(goal_pose.theta - self.robot_pose.theta))
+
+            ## Near goal case: Move to virtual goal    
+            elif(self.get_distance(goal_pose) < 1):
+                goal_pose = self.get_virtual_goal(goal_pose)
+                self.pid_control(goal_pose)        
+            ## Far from goal case: Move direct to goal
+            else:
+                self.pid_control(goal_pose)
+
+    def pid_control(self, goal_pose):
+        '''Use PID to deterimine velocity 
+         and control robot to approach goal_pose(x, y)
+        without considering robot's angular at that target
+        
+        need to rerun function or reset velocity after function finishes
+        '''
+        linear_velo = Kp_v * self.get_distance(goal_pose)
+        angular_velo = Kp_w * self.get_delta_theta(goal_pose)
+        self.velo_control(linear_velo, angular_velo)
+
+    def velo_control(self, linear_velocity, angular_velocity):
+        '''Apply constrain for linear velocity and angular velocity
+        and control robot.
         
         If linear velocity or angular velocity is constrained by MAX_LIN_VELOCITY 
         or MAX_ANG_VELOCITY, the another velocity is decreased by the same factor
-        to the keep R = linear_velocity / angular_velocity unchanged
+        to keep R = linear_velocity / angular_velocity unchanged. 
         '''
         K_l, constrained_linear_velo = self.__get_constrain(linear_velocity, 
                                                                 -MAX_LIN_VELOCITY, MAX_LIN_VELOCITY)
@@ -122,84 +159,62 @@ class Turtlebot3_drive:
         else:
             control_vector.linear.x = constrained_linear_velo
             control_vector.angular.z = constrained_angular_velo
-        self.velo_control.publish(control_vector)
+        self.velo_pub.publish(control_vector)
 
+    def is_at_goal(self, goal_pose, has_theta = True):
+        if(not has_theta):
+            return self.get_distance(goal_pose) < linear_goal_error
+        else:
+            return (self.get_distance(goal_pose) < linear_goal_error and 
+            abs(self.robot_pose.theta - goal_pose.theta) < angular_goal_error)
 
-    def get_distance(self, goal):
-        ''' Get distance between robot and goal(x, y).
+    def get_distance(self, goal_pose):
+        ''' Get distance between robot and goal_pose(x, y).
         '''
 
-        return math.sqrt((self.x - goal[0])**2 + (self.y - goal[1])**2)
+        return math.sqrt((self.robot_pose.x - goal_pose.x)**2 + (self.robot_pose.y - goal_pose.y)**2)
     
-    def get_to_goal_direct(self, goal):
-        ''' Return the angular value of vector point from robot to goal(x, y) '''
+    def get_to_goal_direct(self, goal_pose):
+        ''' Return the angular value of vector point from robot to goal_pose(x, y) '''
 
-        return math.atan2(goal[1] - self.y, goal[0] - self.x)
+        return math.atan2(goal_pose.y - self.robot_pose.y, goal_pose.x - self.robot_pose.x)
     
-    def __standarlize_angle(self, angle):
-        '''Standarlize an angle in range (-pi pi)
-
-        return is_already_standardlized, standarlized_angle'''
-
-        if angle < -math.pi:
-            return False, angle + 2*math.pi
-        if angle > math.pi:
-            return False, angle - 2*math.pi
-        return True, angle
+    def get_delta_theta(self, goal_pose):
+        '''Get the angle between robot's current direction and move-to-goal_pose direction.
         
-    def get_delta_theta(self, goal):
-        '''Get the angle between robot's current direction and move-to-goal direction.
-        
-        Goal is in (x, y) form.
+        goal_pose is in (x, y) form.
         '''
 
-        return self.__standarlize_angle(self.get_to_goal_direct(goal) - self.theta)[1]    
+        return standarlize_angle(self.get_to_goal_direct(goal_pose) - self.robot_pose.theta)   
 
-    def get_virtual_goal(self, goal):
-        ''' return (x, y) of virtual goal
+    def get_virtual_goal(self, goal_pose):
+        ''' return (x, y) of virtual goal_pose
         
-        Virtual goal is temporary goal when robot are within 1m distance from goal.
-        Virtual goal directs robot to be at given direction after reaching the goal.
+        Virtual goal_pose is temporary goal_pose when robot are within 1m distance from goal_pose.
+        Virtual goal_pose directs robot to the desired direction after reaching the goal_pose.
         '''
-        distance = self.get_distance(goal)
-        angel_between = (self.get_to_goal_direct(goal) + goal[2])/2
-        if(abs(self.get_to_goal_direct(goal) - goal[2]) > math.pi):
+        distance = self.get_distance(goal_pose)
+        angel_between = (self.get_to_goal_direct(goal_pose) + goal_pose.theta)/2
+        if(abs(self.get_to_goal_direct(goal_pose) - goal_pose.theta) > math.pi):
             angel_between = angel_between + math.pi
-        return (goal[0] - distance *3 / 4 * math.cos(angel_between), 
-                goal[1] - distance *3 / 4 * math.sin(angel_between))
-
-        
-
+        return Pose2D(goal_pose.x - distance *3 / 4 * math.cos(angel_between), 
+                goal_pose.y - distance *3 / 4 * math.sin(angel_between),
+                None)
 
     def __get_constrain(self, val, min_val, max_val):
         '''Get constrained velocity in [min_val, max_val] of val
         
         Return [K, constrained_val] where K is constrained_val / val
         '''
-
-        constrained_val =  min(max_val, max(min_val, val))
-        if constrained_val == 0:
+        if val == 0:
             return 1, 0
-        else:
-            return constrained_val / val, constrained_val
+        constrained_val =  min(max_val, max(min_val, val))
+        return constrained_val / val, constrained_val
     
+def standarlize_angle(angle):
+    '''Standarlize an angle in range [-pi pi)
 
-
-if __name__ == '__main__':
-    try:
-        argv = rospy.myargv(argv = sys.argv)
-        if len(argv) < 3:
-            print("Not enough parameter")
-            pass
-        else:
-            turtlebot3 = Turtlebot3_drive(10)
-            if len(argv) == 3:
-                print("target (x, y):", argv[1], argv[2])
-                turtlebot3.point_to_point((float(argv[1]), float(argv[2])))
-                print("ok")
-            else:
-                print("target (x, y, theta):", argv[1], argv[2], argv[3])
-                turtlebot3.point_to_point((float(argv[1]), float(argv[2]), float(argv[3])))
-                print("ok")
-    except rospy.ROSInterruptException:
-        pass
+    return standarlized_angle'''
+    return math.atan2(math.sin(angle), math.cos(angle))
+ 
+        
