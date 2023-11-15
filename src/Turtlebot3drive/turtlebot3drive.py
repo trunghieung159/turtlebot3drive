@@ -79,11 +79,11 @@ class Turtlebot3_drive:
         '''
         #Move to starting point of trajectory
         pose_f = trajectory.pose_f
-        goal_pose = pose_f(0)
-        self.point_to_point(goal_pose, trajectory.has_theta)
+        # goal_pose = pose_f(0)
+        # self.point_to_point(goal_pose, trajectory.has_theta)
         delta_t = 1 / self.control_freq
-        interval, total_intervals = 1, trajectory.period / delta_t
-        while interval <= total_intervals:
+        interval, total_intervals = 0, trajectory.period / delta_t
+        while interval < total_intervals:
             goal_pose = pose_f(interval * delta_t)
             self.rate.sleep()
             self.approach_goal(goal_pose, trajectory.has_theta)
