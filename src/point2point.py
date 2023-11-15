@@ -3,6 +3,9 @@ import rospy
 import sys
 from geometry_msgs.msg import *
 from Turtlebot3drive.turtlebot3drive import Turtlebot3_drive 
+## point2point robot drive script 
+## RUN: rosrun turtlebot3drive point2point.py [x] [y] [theta]
+## theta is optional 
 if __name__ == '__main__':
     try:
         argv = rospy.myargv(argv = sys.argv)

@@ -82,7 +82,7 @@ class Turtlebot3_drive:
         # goal_pose = pose_f(0)
         # self.point_to_point(goal_pose, trajectory.has_theta)
         delta_t = 1 / self.control_freq
-        interval, total_intervals = 0, trajectory.period / delta_t
+        interval, total_intervals = 0, int(trajectory.period / delta_t)
         while interval < total_intervals:
             goal_pose = pose_f(interval * delta_t)
             self.rate.sleep()
