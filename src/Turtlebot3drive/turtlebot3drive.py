@@ -10,34 +10,37 @@ from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from tf.transformations import euler_from_quaternion as efq
 from tf.transformations import quaternion_from_euler as qfe
 
+
 Kp_v = 2
 Kp_w = 8
-K_ao = 0.1
-K_mtg = 0.1  
-K_rdw = 0.2
 linear_goal_error = 0.01
 angular_goal_error = 0.1
-sensor_range = 0.3
+sensor_range = 0.4
+
 MAX_LIN_VELOCITY = 0.22
 MAX_ANG_VELOCITY = 2.84
+
+##convert one degree to radians
+angle_increment = math.pi/180
 
 class Turtlebot3_drive:
     def __init__(self, control_freq = 10):
         self.control_freq = control_freq
         self.robot_pose = Pose2D()
         self.goal_pose = Pose2D()
-        self.obstacle_avoid_vector = Vector3(0, 0, 0)
+        self.obstacle_distance = 0
+        self.obstacle_angle = None 
         rospy.init_node('turtlebot3', anonymous=True)
 
         self.rate = rospy.Rate(control_freq)
-        rospy.Subscriber("/odom", Odometry, self.update_robot_pose_callback)
+        rospy.Subscriber("/odom", Odometry, self.__update_robot_pose_callback)
         self.velo_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=100)
         # self.set_goal_pub = rospy.Publisher("move_base_simple/goal_pose", PoseStamped, queue_size = 10)
         # rospy.Subscriber("move_base_simple/goal_pose", PoseStamped, self.__receive_goal_callback)
         rospy.Subscriber("/scan", LaserScan, self.__read_laser_sensor_callback)
         ## stablize the odometry
     
-    def update_robot_pose_callback(self, msg):
+    def __update_robot_pose_callback(self, msg):
         '''Update robot's pose'''
         self.robot_pose.x, self.robot_pose.y = msg.pose.pose.position.x, msg.pose.pose.position.y 
         _, _, self.robot_pose.theta = efq([msg.pose.pose.orientation.x, 
@@ -45,86 +48,22 @@ class Turtlebot3_drive:
                            msg.pose.pose.orientation.z, 
                            msg.pose.pose.orientation.w], 
                            'sxyz')
-    
-    def __receive_goal_callback(self, msg):
-        frame_ID = msg.header.frame_id 
-        _, _, self.goal_pose.theta  = efq([msg.pose.orientation.x, 
-                           msg.pose.orientation.y, 
-                           msg.pose.orientation.z, 
-                           msg.pose.orientation.w], 
-                           'sxyz')
-        self.goal_pose.x = msg.pose.position.x
-        self.goal_pose.y = msg.pose.position.y
-        
-    def __send_goal(self, trajectory):
-        '''Update goal_pose  by trajectory regularly with time step delta_t = 1/f
-        
-        '''
-        delta_t = 1 / self.control_freq
-        interval = 1
-        totalIntervals = trajectory.period / delta_t
-        pose_f = trajectory.pose_f
-        rate = rospy.Rate(self.control_freq)
-        while interval <= totalIntervals:
-            pose = pose_f(interval * delta_t)
-            q = qfe(pose.x, pose.y, pose.theta)
-            msg = PoseStamped()
-            msg.pose.orientation.x,  msg.pose.orientation.y = q[0], q[1]
-            msg.pose.orientation.z, msg.pose.orientation.w = q[2], q[3]
-
-            msg.pose.position = Point(pose.x, pose.y, 0)
-            interval += 1
-            self.set_goal_pub.publish(msg)
-            rate.sleep()
-            
+                
     def __read_laser_sensor_callback(self, msg):
-        '''Update obstacle avoidance vector of robot
-        in world frame coordinate'''
-        obstacle_avoidance_sum_vector = Vector3(0, 0, 0)
-        obstacle_avoidance_vector = Vector3(0, 0, 0)
-        max_distance = 0
-        in_same_object = False
-        theta = self.robot_pose.theta
-
-        ## obstacle in front of robot
-        i, j = 0, 359
-        while i < 360 and msg.ranges[i] <sensor_range and msg.ranges[i] > msg.range_min:
-            distance = msg.ranges[i]
-            if distance > max_distance:
-                obstacle_avoidance_vector = self.__get_avoid_obstacle_vector(distance, msg.angle_increment, i, theta)
-                max_distance = distance
-            i += 1
-        while j > i and msg.ranges[j] <sensor_range and msg.ranges[j] > msg.range_min:
-            distance = msg.ranges[j]
-            if distance > max_distance:
-                obstacle_avoidance_vector = self.__get_avoid_obstacle_vector(distance, msg.angle_increment, j, theta)
-                max_distance = distance
-            j -= 1
-        obstacle_avoidance_sum_vector.x += obstacle_avoidance_vector.x 
-        obstacle_avoidance_sum_vector.y += obstacle_avoidance_vector.y 
-        obstacle_avoidance_vector = Vector3(0, 0, 0)
-        max_distance = 0
-        if i + 1 < j:
-            for angle in range(i+1, j):
-                if in_same_object:
-                    if(msg.ranges[angle] <sensor_range and msg.ranges[angle] > msg.range_min):
-                        distance = msg.ranges[angle]
-                        if distance > max_distance:
-                            obstacle_avoidance_vector = self.__get_avoid_obstacle_vector(distance, msg.angle_increment, angle, theta)
-                    else:
-                        in_same_object = False
-                        obstacle_avoidance_sum_vector.x += obstacle_avoidance_vector.x
-                        obstacle_avoidance_sum_vector.y += obstacle_avoidance_vector.y
-                        obstacle_avoidance_vector = Vector3(0, 0, 0)
-                else:
-                    if(msg.ranges[angle] <sensor_range and msg.ranges[angle] > msg.range_min):
-                        distance = msg.ranges[angle]
-                        in_same_object = True 
-                        max_distance = distance 
-                        obstacle_avoidance_vector = self.__get_avoid_obstacle_vector(distance, msg.angle_increment, angle, theta)
-            obstacle_avoidance_sum_vector.x += obstacle_avoidance_vector.x 
-            obstacle_avoidance_sum_vector.y += obstacle_avoidance_vector.y 
-        self.obstacle_avoid_vector = obstacle_avoidance_sum_vector
+        '''Read sensor and return the nearest obstacle's angle and distance
+        in turtlebot's coordinate'''
+        obstacle_angle = None 
+        min_distance = sensor_range
+        
+        # 0 degree is equivalent to theta direction
+        for i in range(0, 360):
+            if msg.ranges[i] < sensor_range and msg.ranges[i] > msg.range_min:
+                if msg.ranges[i] < min_distance:
+                    min_distance = msg.ranges[i] 
+                    obstacle_angle = i 
+        self.obstacle_angle = obstacle_angle
+        self.obstacle_distance = min_distance 
+            
 
     def move_by_trajectory(self, trajectory):
         '''Control robot by trajectory.
@@ -158,6 +97,7 @@ class Turtlebot3_drive:
             else:
                 self.approach_goal(goal_pose, has_theta)
             self.rate.sleep()    
+            
         #Stop control        
         self.velo_control(0, 0)
 
@@ -168,16 +108,31 @@ class Turtlebot3_drive:
         need to rerun function or reset velocity after function finishes
         '''
         move_to_goal_vector = self.get_move_to_goal_vector(goal_pose)
-        obstacle_avoid_vector =  copy.copy(self.obstacle_avoid_vector)
-        velocity_vector = Vector3(move_to_goal_vector.x + obstacle_avoid_vector.x,
-                                  move_to_goal_vector.y + obstacle_avoid_vector.y, 0)
-        ## add a perpendicular walk if move to goal and 
-        # avoid obstacle vector is in the oppsite direction 
-        avoid_obstacle_vector_direction = math.atan2(obstacle_avoid_vector.y, obstacle_avoid_vector.x)     
-        if(abs(avoid_obstacle_vector_direction - self.get_to_goal_direct(goal_pose)- math.pi) == 0):
-            perpendicular_walk = Vector3(-K_rdw * velocity_vector.y, K_rdw * velocity_vector.x, 0)
-            velocity_vector.x += perpendicular_walk.x 
-            velocity_vector.y += perpendicular_walk.y  
+        ## has obstacle
+        if self.obstacle_angle != None:
+            obstacle_to_base_vector = Vector3(-self.obstacle_distance * math.cos(self.robot_pose.theta + angle_increment * self.obstacle_angle),
+                    -self.obstacle_distance * math.sin(self.robot_pose.theta + angle_increment * self.obstacle_angle), 0)        
+            ## current pose is closer to goal than cloest obstacle
+            if get_norm_3D_vector(move_to_goal_vector) < self.obstacle_distance:
+                velocity_vector = move_to_goal_vector
+            else:
+                mtg_vector_direction = math.atan2(move_to_goal_vector.y, move_to_goal_vector.x)
+                otb_vector_direction = math.atan2(obstacle_to_base_vector.y, obstacle_to_base_vector.x)
+                angle_difference = abs(standardlize_angle(otb_vector_direction - mtg_vector_direction)) 
+                ## mtg vector and otp vector is in opposite direction
+                if angle_difference > 3.1:
+                    ## use a perpendicular vector as velocity vector
+                        otp_vector_norm = get_norm_3D_vector(obstacle_to_base_vector)
+                        velocity_vector = Vector3(otp_vector_norm / 2 * math.cos((otb_vector_direction + math.pi / 2)),
+                                        otp_vector_norm / 2 * math.sin((otb_vector_direction + math.pi / 2)), 0)
+                else:
+                    avoid_obstacle_vector = self.__get_avoid_obstacle_vector(
+                        self.obstacle_distance, angle_increment, self.obstacle_angle, self.robot_pose.theta)
+                    velocity_vector = Vector3(move_to_goal_vector.x + avoid_obstacle_vector.x, move_to_goal_vector.y 
+                                              + avoid_obstacle_vector.y, 0)
+        ## no obstacle
+        else:
+            velocity_vector = move_to_goal_vector
         virtual_goal = Pose2D(self.robot_pose.x + velocity_vector.x, self.robot_pose.y + velocity_vector.y, 0)
         self.pid_control(virtual_goal)
 
@@ -187,8 +142,10 @@ class Turtlebot3_drive:
         goal_pose can either be in (x, y) or (x, y, theta) form,
         need to rerun function or reset velocity after function finishes
         '''
+        ## pose excludes theta
         if(not has_theta):
             self.pid_control(goal_pose)
+        ## pose includes theta
         else:
             ## Self-rotate case
             ## (unable to determine delta_theta) (robot is at the target(x, y) 
@@ -196,11 +153,11 @@ class Turtlebot3_drive:
             if(self.get_distance(goal_pose) < linear_goal_error):
                 self.velo_control(0, Kp_w*(goal_pose.theta - self.robot_pose.theta))
 
-            ## Near goal case: Move to virtual goal    
+            ## Near goal: Move to virtual goal    
             elif(self.get_distance(goal_pose) < 1):
                 goal_pose = self.get_virtual_goal(goal_pose)
                 self.pid_control(goal_pose)        
-            ## Far from goal case: Move direct to goal
+            ## Far from goal: Move direct to goal
             else:
                 self.pid_control(goal_pose)
 
@@ -241,16 +198,16 @@ class Turtlebot3_drive:
         self.velo_pub.publish(control_vector)
 
     def get_move_to_goal_vector(self, goal_pose):
-        ''' Return move to goal vector
+        ''' Return move to goal vector  
 
         vector norm is constrained by max linear velocity of turtlebot3 
         '''
         distance = self.get_distance(goal_pose)
-        max_norm = 3
+        max_norm = MAX_LIN_VELOCITY
         _, distance = self.__get_constrain(distance, -max_norm, max_norm)
-        direction = self.get_to_goal_direct(goal_pose)
-        x = K_mtg * math.cos(direction) * distance 
-        y = K_mtg * math.sin(direction) * distance
+        direction = self.get_base_to_goal_direct(goal_pose)
+        x = math.cos(direction) * distance 
+        y = math.sin(direction) * distance
         return Vector3(x, y, 0)
 
     def is_at_goal(self, goal_pose, has_theta):
@@ -268,7 +225,7 @@ class Turtlebot3_drive:
 
         return math.sqrt((self.robot_pose.x - pose.x)**2 + (self.robot_pose.y - pose.y)**2)
     
-    def get_to_goal_direct(self, goal_pose):
+    def get_base_to_goal_direct(self, goal_pose):
         ''' Return the angular value of vector point from robot to goal_pose(x, y) '''
 
         return math.atan2(goal_pose.y - self.robot_pose.y, goal_pose.x - self.robot_pose.x)
@@ -279,7 +236,7 @@ class Turtlebot3_drive:
         goal_pose is in (x, y) form.
         '''
 
-        return standarlize_angle(self.get_to_goal_direct(goal_pose) - self.robot_pose.theta)   
+        return standardlize_angle(self.get_base_to_goal_direct(goal_pose) - self.robot_pose.theta)   
 
     def get_virtual_goal(self, goal_pose):
         ''' return (x, y) of virtual goal_pose
@@ -288,8 +245,8 @@ class Turtlebot3_drive:
         Virtual goal_pose directs robot to the desired direction after reaching the goal_pose.
         '''
         distance = self.get_distance(goal_pose)
-        angel_between = (self.get_to_goal_direct(goal_pose) + goal_pose.theta)/2
-        if(abs(self.get_to_goal_direct(goal_pose) - goal_pose.theta) > math.pi):
+        angel_between = (self.get_base_to_goal_direct(goal_pose) + goal_pose.theta)/2
+        if(abs(self.get_base_to_goal_direct(goal_pose) - goal_pose.theta) > math.pi):
             angel_between = angel_between + math.pi
         return Pose2D(goal_pose.x - distance *3 / 4 * math.cos(angel_between), 
                 goal_pose.y - distance *3 / 4 * math.sin(angel_between),
@@ -309,17 +266,26 @@ class Turtlebot3_drive:
         '''Determine obstacle avoidance vector of an angle by messsage
         
         '''
-        magnitude = ((1 / distance** 2) - (1 / sensor_range**2))
-        return Vector3(-K_ao * magnitude * math.cos(angle_increment * angle + theta), 
-                                        -K_ao * magnitude * math.sin(angle_increment * angle + theta), 0)
+        magnitude =  ((sensor_range - distance) / (sensor_range - MAX_LIN_VELOCITY)) * MAX_LIN_VELOCITY
+        # magnitude = (1 / distance** 2) - (1 / sensor_range ** 2)
+        if magnitude > MAX_LIN_VELOCITY:
+            magnitude = MAX_LIN_VELOCITY
+        return Vector3(- magnitude * math.cos(angle_increment * angle + theta), 
+                    - magnitude * math.sin(angle_increment * angle + theta), 0)
     
     def print_sensor(self):
-        print(self.obstacle_avoid_vector)
+        print(self.oa_vector)
 
-def standarlize_angle(angle):
+def standardlize_angle(angle):
     '''Standarlize an angle in range [-pi pi)
+    return standardlized_angle'''
+    standardlized_angle =  math.remainder(angle, math.tau)
+    if standardlized_angle == math.pi:
+        standardlized_angle = -standardlized_angle
+    return standardlized_angle
 
-    return standarlized_angle'''
-    return angle - 2 * math.pi * int((int(angle / math.pi) + 1)/2)
- 
-        
+def get_norm_3D_vector(vector):
+    '''Return norm of 3D vector
+    ''' 
+    return math.sqrt(vector.x ** 2 + vector.y ** 2 + vector.z ** 2)
+     

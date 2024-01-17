@@ -29,7 +29,7 @@ For non-obstacle environment
 ```bash
 roslaunch turtlebot3_gazebo turtlebot3_empty_world.launch
 ```
-For environment having obstacles
+For environment with obstacles
 ```bash
 roslaunch turtlebot3_gazebo turtlebot3_world.launch
 ```
@@ -38,9 +38,9 @@ New terminal
 ```bash
 cd ~/catkin_ws
 source ~/catkin_ws/devel/setup.bash
-rosrun turtlebot3drive SCRIPT [PARAMETER1] [PARAMETER2] [PARAMETER3]
+rosrun turtlebot3drive SCRIPT_FILE [PARAMETER1] [PARAMETER2] [PARAMETER3]
 ```
-***Provided scripts:***
+***Provided SCRIPTs:***
 ### 1. Point to point (no obstacle) 
 ```bash
 point2point.py [x] [y] [theta] False
@@ -60,7 +60,7 @@ move_by_trajectory.py [path/file_name.csv] [deltaT] [has_theta]
 (path/file_name.csv is the path to file name while deltaT is time (in seconds) between two step  
 (two consecutive columns of .csv file), has_theta determines whether the trajectory including  
 theta or not, csv file cointains 3 columns corresponding to [x y theta].  
-### 3. Point to point (existing obstacle)
+### 3. Point to point (with obstacles)
 ```bash
 rosrun turtlebot3drive point2point.py [x] [y] True
 ```
