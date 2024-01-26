@@ -158,8 +158,9 @@ include_directories(
 ## Mark executable scripts (Python etc.) for installation
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
-  src/point2point.py
+  src/pose2pose.py
   src/move_by_trajectory.py
+  src/formation_control.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

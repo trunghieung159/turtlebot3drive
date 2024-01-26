@@ -25,27 +25,32 @@ cd ~/catkin_ws
 source ~/catkin_ws/devel/setup.bash
 export TURTLEBOT3_MODEL=burger
 ```
-For non-obstacle environment
+For single robot non-obstacle environment
 ```bash
 roslaunch turtlebot3_gazebo turtlebot3_empty_world.launch
 ```
-For environment with obstacles
+For single robot environment with obstacles
 ```bash
 roslaunch turtlebot3_gazebo turtlebot3_world.launch
+```
+For multiple robots non-obstacle environment
+```bash
+roslaunch turtlebot3drive 3robots_formation.launch
 ```
 ## 3.3 Run drive script 
 New terminal  
 ```bash
 cd ~/catkin_ws
 source ~/catkin_ws/devel/setup.bash
-rosrun turtlebot3drive SCRIPT_FILE [PARAMETER1] [PARAMETER2] [PARAMETER3]
+rosrun turtlebot3drive SCRIPT_FILE [PARAMETER1] [PARAMETER2] ... [PARAMETER_N]
 ```
 ***Provided SCRIPTs:***
-### 1. Point to point (no obstacle) 
+### 1. Pose to pose (with / without obstacles)
 ```bash
-point2point.py [x] [y] [theta] False
+pose2pose.py [x] [y] [theta] [has_obstacle]
 ```  
-([x y theta] is pose of the target ;theta is optional)  
+([x y theta] is pose of the target ;theta is optional)
+has_obstacle = True if obstacles exist  
 ### 2. Move by trajectory (no obstacle)
 #### Circular radius
 ```bash  
@@ -57,14 +62,15 @@ and T is the expected time for the turtlebot to finish the trajectory)
  ```bash
 move_by_trajectory.py [path/file_name.csv] [deltaT] [has_theta]
 ```
-(path/file_name.csv is the path to file name while deltaT is time (in seconds) between two step  
+(path/file_name.csv is the path to file name while deltaT is time (in seconds) between two step)  
 (two consecutive columns of .csv file), has_theta determines whether the trajectory including  
 theta or not, csv file cointains 3 columns corresponding to [x y theta].  
-### 3. Point to point (with obstacles)
+### 3. Formation drive (with / without obstacles)
 ```bash
-rosrun turtlebot3drive point2point.py [x] [y] True
+rosrun turtlebot3drive formation_control.py [x] [y] [theta] 
 ```
-(x, y) is pose of target
+(x, y, theta) is pose of leader's target,
+theta is optional
 
   
    
