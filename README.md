@@ -33,9 +33,13 @@ For single robot environment with obstacles
 ```bash
 roslaunch turtlebot3_gazebo turtlebot3_world.launch
 ```
-For multiple robots non-obstacle environment
+For multiple robots formation control in non-obstacle environment
 ```bash
-roslaunch turtlebot3drive 3robots_formation.launch
+roslaunch turtlebot3drive 3robots_formation_empty.launch
+```
+For multiple robots formation control in obstacles existing environment
+```bash
+roslaunch turtlebot3drive 3robots_formation_obstacles.launch
 ```
 ## 3.3 Run drive script 
 New terminal  
@@ -47,10 +51,9 @@ rosrun turtlebot3drive SCRIPT_FILE [PARAMETER1] [PARAMETER2] ... [PARAMETER_N]
 ***Provided SCRIPTs:***
 ### 1. Pose to pose (with / without obstacles)
 ```bash
-pose2pose.py [x] [y] [theta] [has_obstacle]
+pose2pose.py [x] [y] [theta]
 ```  
 ([x y theta] is pose of the target ;theta is optional)
-has_obstacle = True if obstacles exist  
 ### 2. Move by trajectory (no obstacle)
 #### Circular radius
 ```bash  

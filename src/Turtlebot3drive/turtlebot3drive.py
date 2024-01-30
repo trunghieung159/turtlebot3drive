@@ -13,7 +13,7 @@ from tf.transformations import quaternion_from_euler as qfe
 
 Kp_v = 2
 Kp_w = 8
-linear_goal_error = 0.02
+linear_goal_error = 0.01
 angular_goal_error = 0.1
 sensor_range = 0.4
 
@@ -22,15 +22,20 @@ angle_increment = math.pi/180
 
 MAX_LIN_VELOCITY = 0.22
 MAX_ANG_VELOCITY = 2.84
-
+BURGER_RADIUS = 0.18
 
 class Turtlebot3_drive:
-    def __init__(self, control_freq = 10, robot_name = '', node_name = 'turtlebot3'):
+    def __init__(self, control_freq = 10, robot_name = '', node_name = 'turtlebot3', 
+                 max_velocity_vector_norm = MAX_LIN_VELOCITY):
         self.control_freq = control_freq
+        self.robot_name = robot_name
+        self.max_velocity_norm = max_velocity_vector_norm
         self.robot_pose = Pose2D()
         self.goal_pose = Pose2D()
         self.obstacle_distance = float('inf')
         self.obstacle_direction = None 
+        self.velocity_vector = Vector3(0, 0, 0)
+        
         if not node_name in rosnode.get_node_names():
             rospy.init_node(node_name, anonymous=False)
         self.rate = rospy.Rate(control_freq)
@@ -42,10 +47,10 @@ class Turtlebot3_drive:
         '''Update robot's pose'''
         self.robot_pose = Pose2D(msg.pose.pose.position.x, msg.pose.pose.position.y, 
                     efq([msg.pose.pose.orientation.x, 
-                        msg.pose.pose.orientation.y, 
-                        msg.pose.pose.orientation.z, 
-                        msg.pose.pose.orientation.w], 
-                        'sxyz')[2])
+                         msg.pose.pose.orientation.y, 
+                         msg.pose.pose.orientation.z, 
+                         msg.pose.pose.orientation.w], 
+                         'sxyz')[2])
         
     def __read_laser_sensor_callback(self, msg):
         '''Read sensor and update the direction to nearest obstacle 
@@ -60,7 +65,8 @@ class Turtlebot3_drive:
                     min_distance = msg.ranges[i] 
                     obstacle_direction = i 
         if obstacle_direction != None:
-            self.obstacle_direction = standardlize_angle(self.robot_pose.theta + (obstacle_direction * angle_increment)) 
+            self.obstacle_direction = standardlize_angle(self.robot_pose.theta + 
+                                                        (obstacle_direction * angle_increment)) 
             self.obstacle_distance = min_distance 
         else:
             self.obstacle_direction = obstacle_direction
@@ -92,65 +98,48 @@ class Turtlebot3_drive:
         '''
         while not self.is_at_goal(goal_pose, has_theta):
             if avoid_obstacle:
-                self.approach_goal_avoid_obstacle(goal_pose)
+                self.approach_goal_avoid_obstacle(goal_pose, has_theta)
             else:
                 self.approach_goal(goal_pose, has_theta)
             self.rate.sleep()    
             
-        #Stop control        
-        self.velo_control(0, 0)
+        self.stop_control()
 
     def approach_goal_avoid_obstacle(self, goal_pose, has_theta):
         '''Determine and apply control signal for robot to approach goal and avoid obstacle.
-        
-        goal_pose is in (x, y) form,
-        need to rerun function or reset velocity after function finishes
+
+        Goal_pose is in (x, y) form.
+        Need to rerun function or reset velocity after function finishes
         '''
-        move_to_goal_vector = self.get_move_to_goal_vector(goal_pose)           
         obstacle_distance = self.obstacle_distance
         obstacle_direction = self.obstacle_direction
-
         ## no obstacle or goal is closer than the closest obstacle
-        if obstacle_direction == None or obstacle_distance == float('inf') or self.get_distance(goal_pose) < obstacle_distance:
-            velocity_vector = self.approach_goal(goal_pose, has_theta)
+        if obstacle_direction == None or obstacle_distance == float('inf') or \
+        self.get_distance(goal_pose) + BURGER_RADIUS < obstacle_distance :
+            self.approach_goal(goal_pose, has_theta)
         ## obstacles detected and goal is further than the closest obstacle
         else:
-            avoid_obstacle_vector = self.measure_avoid_obstacle_vector(obstacle_direction, obstacle_distance)
-            mtg_vector_direction = math.atan2(move_to_goal_vector.y, move_to_goal_vector.x)
-            ao_vector_direction = math.atan2(avoid_obstacle_vector.y, avoid_obstacle_vector.x)
-            angle_difference = abs(standardlize_angle(ao_vector_direction - mtg_vector_direction)) 
-            ## mtg vector and ao vector is in opposite direction
-            ## move robot in the line which is perpendicular to the ao axis
-            if angle_difference > 3.1:
-                velocity_vector = Vector3(obstacle_distance / 2 * math.cos((ao_vector_direction + math.pi / 2)),
-                                obstacle_distance / 2 * math.sin((ao_vector_direction + math.pi / 2)), 0)
-            else:
-                velocity_vector = Vector3(move_to_goal_vector.x + avoid_obstacle_vector.x, 
-                                            move_to_goal_vector.y + avoid_obstacle_vector.y, 
-                                            0)
-            velocity_vector = get_constrained_vector(velocity_vector, MAX_LIN_VELOCITY)
+            velocity_vector = self.get_sum_vector(goal_pose, obstacle_distance, obstacle_direction)    
             virtual_goal = Pose2D(self.robot_pose.x + velocity_vector.x, 
-                            self.robot_pose.y + velocity_vector.y, 
-                            0)
+                                  self.robot_pose.y + velocity_vector.y, 
+                                  0)
             self.pid_control(virtual_goal)
-        return velocity_vector
+            self.velocity_vector = velocity_vector
+            
 
     def approach_goal(self, goal_pose, has_theta):
-        '''Determine and apply control signal for robot to approach goal without obstacle.
-        Return velocity vector
+        '''Determine and apply control signal for robot to approach goal.
 
-        goal_pose can either be in (x, y) or (x, y, theta) form,
-        need to rerun function or reset velocity after function finishes
+        Goal_pose can either be in (x, y) or (x, y, theta) form.
+        Need to rerun function or reset velocity after function finishes
         '''
         ## pose excludes theta
         if(not has_theta):
-            velocity_vector = get_constrained_vector(self.get_move_to_goal_vector(goal_pose), 
-                                                     MAX_LIN_VELOCITY)
+            velocity_vector = self.get_move_to_goal_vector(goal_pose)
             virtual_pose = Vector3(self.robot_pose.x + velocity_vector.x, 
                                    self.robot_pose.y + velocity_vector.y, 
                                    0)
             self.pid_control(virtual_pose)
-            return velocity_vector
         ## pose includes theta
         else:
             ## Self-rotate case:
@@ -158,20 +147,25 @@ class Turtlebot3_drive:
             ## robot's theta differs from goal_pose's theta  
             ## delta_theta fluctuates wildly, robot needs to self-rotate 
             if(self.get_distance(goal_pose) < linear_goal_error):
-                self.velo_control(0, Kp_w * standardlize_angle(goal_pose.theta - self.robot_pose.theta))
+                self.velo_control(0, Kp_w * \
+                                 standardlize_angle(goal_pose.theta - self.robot_pose.theta))
                 return Vector3(0, 0, 0)
             else:
                 ## Near goal case: Move to temporary goal    
                 if(self.get_distance(goal_pose) < 1):
                     goal_pose = self.get_temporary_goal(goal_pose)
                 ## Drive to (temporary) goal 
-                velocity_vector = get_constrained_vector(self.get_move_to_goal_vector(goal_pose), 
-                                                        MAX_LIN_VELOCITY)
+                velocity_vector = self.get_move_to_goal_vector(goal_pose)
                 virtual_pose = Vector3(self.robot_pose.x + velocity_vector.x, 
-                                    self.robot_pose.y + velocity_vector.y,
-                                    0)
+                                       self.robot_pose.y + velocity_vector.y,
+                                       0)
                 self.pid_control(goal_pose)     
-                return velocity_vector   
+        self.velocity_vector = velocity_vector
+
+    def stop_control(self):
+        '''Set robot's linear and angular velocity to 0'''
+        self.velo_control(0, 0)
+        self.velocity_vector = Vector3(0, 0, 0)
 
     def pid_control(self, goal_pose):
         '''Use PID to deterimine velocity 
@@ -193,9 +187,11 @@ class Turtlebot3_drive:
         to keep R = linear_velocity / angular_velocity unchanged. 
         '''
         K_l, constrained_linear_velo = constrain(linear_velocity, 
-                                                                -MAX_LIN_VELOCITY, MAX_LIN_VELOCITY)
+                                                 -MAX_LIN_VELOCITY, 
+                                                 MAX_LIN_VELOCITY)
         K_w, constrained_angular_velo = constrain(angular_velocity, 
-                                                             -MAX_ANG_VELOCITY, MAX_ANG_VELOCITY)
+                                                 -MAX_ANG_VELOCITY,
+                                                 MAX_ANG_VELOCITY)
     
         control_vector = Twist()
         if K_l < K_w:
@@ -209,42 +205,76 @@ class Turtlebot3_drive:
             control_vector.angular.z = constrained_angular_velo
         self.velo_pub.publish(control_vector)
 
+    def get_sum_vector(self, goal_pose, obstacle_distance, obstacle_direction):
+        '''Return velocity sum vector of move to goal, obstacle avoidance vector
+        or perpendicular vector'''
+
+        move_to_goal_vector = self.get_move_to_goal_vector(goal_pose)           
+        avoid_obstacle_vector = self.measure_avoid_obstacle_vector(obstacle_direction, 
+                                                                   obstacle_distance)
+        mtg_vector_direction = math.atan2(move_to_goal_vector.y, 
+                                          move_to_goal_vector.x)
+        ao_vector_direction = math.atan2(avoid_obstacle_vector.y, 
+                                         avoid_obstacle_vector.x)
+        angle_difference = abs(standardlize_angle(ao_vector_direction -  
+                                                  mtg_vector_direction)) 
+        ## mtg vector and ao vector is in opposite direction
+        ## move robot in the line which is perpendicular to the mtg axis
+        if angle_difference > 3.0:
+            delta_angle = standardlize_angle(math.atan2(self.velocity_vector.y , self.velocity_vector.x) -
+                                             mtg_vector_direction) 
+            if delta_angle > 0:
+                vector_direction = standardlize_angle(mtg_vector_direction + math.pi/2)
+            else:
+                vector_direction = standardlize_angle(mtg_vector_direction - math.pi/2)
+            if obstacle_distance > self.max_velocity_norm:
+                vector_magnitude = get_norm_3D_vector(self.velocity_vector) 
+            else:
+                vector_magnitude = obstacle_distance * 0.8
+            velocity_vector = Vector3(vector_magnitude * math.cos(vector_direction),
+                                      vector_magnitude * math.sin(vector_direction),
+                                      0)
+        else:
+            velocity_vector = Vector3(move_to_goal_vector.x + avoid_obstacle_vector.x, 
+                                      move_to_goal_vector.y + avoid_obstacle_vector.y, 
+                                      0)
+            velocity_vector = get_constrained_vector(velocity_vector, 
+                                                     min(self.obstacle_distance, 
+                                                         self.max_velocity_norm))
+            
+        return velocity_vector
+
+
     def get_move_to_goal_vector(self, goal_pose):
         ''' Return move to goal vector  
 
-        vector norm is constrained by max linear velocity / control frequency of turtlebot3 
+        vector norm is constrained by max velocity norm 
         '''
-        distance = self.get_distance(goal_pose)
-        max_norm = MAX_LIN_VELOCITY 
-        _, distance = constrain(distance, -max_norm, max_norm)
-        direction = self.get_base_to_goal_direct(goal_pose)
-        x = math.cos(direction) * distance 
-        y = math.sin(direction) * distance
-        return Vector3(x, y, 0)
+        move_to_goal_vector = Vector3(goal_pose.x - self.robot_pose.x, 
+                                      goal_pose.y - self.robot_pose.y, 
+                                      0) 
+        return get_constrained_vector(move_to_goal_vector, self.max_velocity_norm)
     
     def get_avoid_obstacle_vector(self):
         '''Get obstacle avoidance vector 
         '''
         obstacle_distance = self.obstacle_distance
         obstacle_direction = self.obstacle_direction
-        if obstacle_direction == None or obstacle_distance == float('inf'):
+        if obstacle_direction == None  or obstacle_distance == float('inf'):
             return Vector3(0, 0, 0)
         else:
             return self.measure_avoid_obstacle_vector(obstacle_direction, 
                                                       obstacle_distance)
-
+        
     def measure_avoid_obstacle_vector(self, obstacle_direction, obstacle_distance):
         '''Determine obstacle avoidance vector 
         by obstacle_direction and obstacle_distance
         '''
-        max_norm = MAX_LIN_VELOCITY 
-        magnitude =  ((sensor_range - obstacle_distance) 
-                      / (sensor_range - max_norm)) * max_norm
-        # magnitude = (1 / self.obstacle_direction ** 2) - (1 / sensor_range ** 2)
-        if magnitude > MAX_LIN_VELOCITY:
-            magnitude = MAX_LIN_VELOCITY
+        max_norm = self.max_velocity_norm 
+        magnitude =   ((sensor_range - obstacle_distance) /
+                      (sensor_range -  max_norm)) * max_norm
         return Vector3(- magnitude * math.cos(obstacle_direction), 
-                    - magnitude * math.sin(obstacle_direction), 0)
+                       - magnitude * math.sin(obstacle_direction), 0)
 
 
     def is_at_goal(self, goal_pose, has_theta):
@@ -253,7 +283,7 @@ class Turtlebot3_drive:
         if(not has_theta):
             return self.get_distance(goal_pose) < linear_goal_error
         else:
-            return (self.get_distance(goal_pose) < linear_goal_error and 
+            return (self.get_distance(goal_pose) < linear_goal_error and \
             abs(self.robot_pose.theta - goal_pose.theta) < angular_goal_error)
 
     def get_distance(self, pose):
@@ -282,12 +312,12 @@ class Turtlebot3_drive:
         Temporary goal_pose directs robot to the desired direction when reaching the goal_pose.
         '''
         distance = self.get_distance(goal_pose)
-        angel_between = (self.get_base_to_goal_direct(goal_pose) + goal_pose.theta)/2
+        angel_between = (self.get_base_to_goal_direct(goal_pose) + goal_pose.theta) / 2
         if(abs(self.get_base_to_goal_direct(goal_pose) - goal_pose.theta) > math.pi):
             angel_between = angel_between + math.pi
         return Pose2D(goal_pose.x - distance *3 / 4 * math.cos(angel_between), 
-                goal_pose.y - distance *3 / 4 * math.sin(angel_between),
-                None)
+                      goal_pose.y - distance *3 / 4 * math.sin(angel_between),
+                      None)
 
 def constrain(val, min_val, max_val):
         '''Get constrained value of val in the range [min_val, max_val]
@@ -312,6 +342,16 @@ def get_norm_3D_vector(vector):
     ''' 
     return math.sqrt(vector.x ** 2 + vector.y ** 2 + vector.z ** 2)
      
+def mul_vector(vector, k):
+    '''Return k * vector'''
+    return Vector3(k * vector.x, k * vector.y, k * vector.z)
+
+def add_vector(vector1, vector2):
+    '''Return vector1 + vector2'''
+    return Vector3(vector1.x + vector2.x,
+                   vector1.y + vector2.y,
+                   vector1.z + vector2.z)
+
 def get_constrained_vector(vector, max_norm):
     '''Return vector with the same direction with original vector 
     but is constrained by maximum norm'''
@@ -322,3 +362,4 @@ def get_constrained_vector(vector, max_norm):
         return constrained_vector
     else:
         return vector
+    
