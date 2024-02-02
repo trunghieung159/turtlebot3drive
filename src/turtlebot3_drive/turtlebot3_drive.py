@@ -9,20 +9,9 @@ from nav_msgs.msg import Odometry
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from tf.transformations import euler_from_quaternion as efq
 from tf.transformations import quaternion_from_euler as qfe
+from constants_and_functions.constants import *
+from constants_and_functions.functions import *
 
-
-Kp_v = 2
-Kp_w = 8
-linear_goal_error = 0.01
-angular_goal_error = 0.1
-sensor_range = 0.4
-
-##one degree in radians
-angle_increment = math.pi/180
-
-MAX_LIN_VELOCITY = 0.22
-MAX_ANG_VELOCITY = 2.84
-BURGER_RADIUS = 0.18
 
 class Turtlebot3_drive:
     def __init__(self, control_freq = 10, robot_name = '', node_name = 'turtlebot3', 
@@ -55,7 +44,7 @@ class Turtlebot3_drive:
     def __read_laser_sensor_callback(self, msg):
         '''Read sensor and update the direction to nearest obstacle 
         in worldframe coordinate and its distance from turtlebot3'''
-        obstacle_direction = None 
+        obstacle_relative_direction = None 
         min_distance = sensor_range
         
         # 0 degree corresponds to theta direction
@@ -63,13 +52,13 @@ class Turtlebot3_drive:
             if msg.ranges[i] < sensor_range and msg.ranges[i] > msg.range_min:
                 if msg.ranges[i] < min_distance:
                     min_distance = msg.ranges[i] 
-                    obstacle_direction = i 
-        if obstacle_direction != None:
+                    obstacle_relative_direction = i 
+        if obstacle_relative_direction != None:
             self.obstacle_direction = standardlize_angle(self.robot_pose.theta + 
-                                                        (obstacle_direction * angle_increment)) 
+                                                        (obstacle_relative_direction * angle_increment)) 
             self.obstacle_distance = min_distance 
         else:
-            self.obstacle_direction = obstacle_direction
+            self.obstacle_direction = None
             self.obstacle_distance = float('inf') 
 
     def move_by_trajectory(self, trajectory):
@@ -102,7 +91,6 @@ class Turtlebot3_drive:
             else:
                 self.approach_goal(goal_pose, has_theta)
             self.rate.sleep()    
-            
         self.stop_control()
 
     def approach_goal_avoid_obstacle(self, goal_pose, has_theta):
@@ -113,9 +101,9 @@ class Turtlebot3_drive:
         '''
         obstacle_distance = self.obstacle_distance
         obstacle_direction = self.obstacle_direction
-        ## no obstacle or goal is closer than the closest obstacle
+        ## no obstacle detected or goal is closer than the closest obstacle
         if obstacle_direction == None or obstacle_distance == float('inf') or \
-        self.get_distance(goal_pose) + BURGER_RADIUS < obstacle_distance :
+        self.get_distance(goal_pose) < obstacle_distance - MAX_LIN_VELOCITY:
             self.approach_goal(goal_pose, has_theta)
         ## obstacles detected and goal is further than the closest obstacle
         else:
@@ -136,10 +124,7 @@ class Turtlebot3_drive:
         ## pose excludes theta
         if(not has_theta):
             velocity_vector = self.get_move_to_goal_vector(goal_pose)
-            virtual_pose = Vector3(self.robot_pose.x + velocity_vector.x, 
-                                   self.robot_pose.y + velocity_vector.y, 
-                                   0)
-            self.pid_control(virtual_pose)
+            self.pid_control(goal_pose)
         ## pose includes theta
         else:
             ## Self-rotate case:
@@ -149,16 +134,13 @@ class Turtlebot3_drive:
             if(self.get_distance(goal_pose) < linear_goal_error):
                 self.velo_control(0, Kp_w * \
                                  standardlize_angle(goal_pose.theta - self.robot_pose.theta))
-                return Vector3(0, 0, 0)
+                velocity_vector =  Vector3(0, 0, 0)
             else:
                 ## Near goal case: Move to temporary goal    
                 if(self.get_distance(goal_pose) < 1):
                     goal_pose = self.get_temporary_goal(goal_pose)
                 ## Drive to (temporary) goal 
                 velocity_vector = self.get_move_to_goal_vector(goal_pose)
-                virtual_pose = Vector3(self.robot_pose.x + velocity_vector.x, 
-                                       self.robot_pose.y + velocity_vector.y,
-                                       0)
                 self.pid_control(goal_pose)     
         self.velocity_vector = velocity_vector
 
@@ -186,23 +168,18 @@ class Turtlebot3_drive:
         or MAX_ANG_VELOCITY, the another velocity is decreased by the same factor
         to keep R = linear_velocity / angular_velocity unchanged. 
         '''
-        K_l, constrained_linear_velo = constrain(linear_velocity, 
-                                                 -MAX_LIN_VELOCITY, 
-                                                 MAX_LIN_VELOCITY)
-        K_w, constrained_angular_velo = constrain(angular_velocity, 
-                                                 -MAX_ANG_VELOCITY,
-                                                 MAX_ANG_VELOCITY)
-    
-        control_vector = Twist()
-        if K_l < K_w:
-            control_vector.linear.x = constrained_linear_velo
-            control_vector.angular.z = angular_velocity*K_l 
-        elif K_w < K_l:
-            control_vector.angular.z = constrained_angular_velo
-            control_vector.linear.x = linear_velocity*K_w
+        if linear_velocity == 0:
+            k_v = 1
+        else: 
+            k_v = self.max_velocity_norm / linear_velocity
+        if angular_velocity == 0:
+            k_w = 1
         else:
-            control_vector.linear.x = constrained_linear_velo
-            control_vector.angular.z = constrained_angular_velo
+            k_w = MAX_ANG_VELOCITY / abs(angular_velocity)
+        k = min(k_v, k_w, 1)
+        control_vector = Twist()
+        control_vector.linear.x = linear_velocity * k
+        control_vector.angular.z = angular_velocity * k
         self.velo_pub.publish(control_vector)
 
     def get_sum_vector(self, goal_pose, obstacle_distance, obstacle_direction):
@@ -284,7 +261,8 @@ class Turtlebot3_drive:
             return self.get_distance(goal_pose) < linear_goal_error
         else:
             return (self.get_distance(goal_pose) < linear_goal_error and \
-            abs(self.robot_pose.theta - goal_pose.theta) < angular_goal_error)
+            abs(standardlize_angle(self.robot_pose.theta - goal_pose.theta)) \
+                 < angular_goal_error)
 
     def get_distance(self, pose):
         ''' Get distance between robot and pose(x, y).
@@ -298,11 +276,10 @@ class Turtlebot3_drive:
         return math.atan2(goal_pose.y - self.robot_pose.y, goal_pose.x - self.robot_pose.x)
     
     def get_delta_theta(self, goal_pose):
-        '''Get the angle between robot's current direction and move-to-goal_pose direction.
+        '''Return the diffence between base to goal direction and robot's current direction
         
         goal_pose is in (x, y) form.
         '''
-
         return standardlize_angle(self.get_base_to_goal_direct(goal_pose) - self.robot_pose.theta)   
 
     def get_temporary_goal(self, goal_pose):
@@ -312,22 +289,13 @@ class Turtlebot3_drive:
         Temporary goal_pose directs robot to the desired direction when reaching the goal_pose.
         '''
         distance = self.get_distance(goal_pose)
-        angel_between = (self.get_base_to_goal_direct(goal_pose) + goal_pose.theta) / 2
-        if(abs(self.get_base_to_goal_direct(goal_pose) - goal_pose.theta) > math.pi):
-            angel_between = angel_between + math.pi
-        return Pose2D(goal_pose.x - distance *3 / 4 * math.cos(angel_between), 
-                      goal_pose.y - distance *3 / 4 * math.sin(angel_between),
+        delta_theta = standardlize_angle(goal_pose.theta - 
+                                         self.get_base_to_goal_direct(goal_pose))
+        temporary_goal_to_goal_direction = standardlize_angle(self.robot_pose.theta +
+                                                               (1- K_t_theta) * delta_theta)
+        return Pose2D(goal_pose.x - K_t_rho * distance * math.cos(temporary_goal_to_goal_direction), 
+                      goal_pose.y - K_t_rho * distance * math.sin(temporary_goal_to_goal_direction),
                       None)
-
-def constrain(val, min_val, max_val):
-        '''Get constrained value of val in the range [min_val, max_val]
-        
-        Return [K, constrained_val] where K is constrained_val / val
-        '''
-        if val == 0:
-            return 1, 0
-        constrained_val =  min(max_val, max(min_val, val))
-        return constrained_val / val, constrained_val
 
 def standardlize_angle(angle):
     '''Standarlize an angle in range [-pi pi)

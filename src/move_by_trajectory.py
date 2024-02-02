@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 import rospy
 import sys
-from Turtlebot3drive.turtlebot3drive import Turtlebot3_drive 
-from Trajectory_generator.trajectory_generator import Trajectory
+from turtlebot3_drive.turtlebot3_drive import Turtlebot3_drive 
+from trajectory_generator.trajectory_generator import Trajectory
 
 ## Drive turtlebot moves in a trajectory
 ## - Circular trajectory: rosrun move_by_trajectory.py [x] [y] [r] [T]

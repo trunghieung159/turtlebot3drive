@@ -5,7 +5,7 @@ from catkin_pkg.python_setup import generate_distutils_setup
 
 # fetch values from package.xml
 setup_args = generate_distutils_setup(
-    packages=['Turtlebot3drive', 'Trajectory_generator', 'Turtlebot3_formation_drive'],
+    packages=['turtlebot3_drive', 'trajectory_generator'],
     package_dir={'': 'src'},
 )
 

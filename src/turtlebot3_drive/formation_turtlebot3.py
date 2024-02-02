@@ -1,24 +1,23 @@
 import rospy
 import math
-import time
-import copy
 import numpy
 from geometry_msgs.msg import *
 from sensor_msgs.msg import *
 from nav_msgs.msg import Odometry
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from std_msgs.msg import Bool 
-from Turtlebot3drive.turtlebot3drive import *
+from turtlebot3_drive.turtlebot3_drive import *
+from constants_and_functions.constants import *
+from constants_and_functions.functions import *
 
 
-
-class Turtlebot3_formation_drive():
+class Formation_turtlebot3():
     def __init__(self, control_freq = 10, number_of_robots = 3, alpha = math.pi/3, d = 1):
         self.leader_id = math.ceil(float(number_of_robots) / 2) 
         self.robots = numpy.empty(number_of_robots, dtype= Turtlebot3_drive)
         self.number_of_robots = number_of_robots
         self.control_freq = control_freq
-        self.max_velocity_norm = MAX_LIN_VELOCITY / 2
+        self.max_velocity_norm = MAX_LIN_VELOCITY 
         self.alpha = alpha 
         self.d = d 
         rospy.init_node('turtlebot3_formation_control', anonymous=False)
@@ -65,17 +64,13 @@ class Turtlebot3_formation_drive():
         '''Drive leader and followers until leader reaching the goal'''
         while not self.leader.is_at_goal(goal_pose, has_theta):
             ## Control leader
-            mtg_vector = self.leader.get_move_to_goal_vector(goal_pose)
-            virtual_goal = Pose2D(self.leader.robot_pose.x + mtg_vector.x,
-                                  self.leader.robot_pose.y + mtg_vector.y,
-                                  goal_pose.theta) 
-            self.leader.approach_goal_avoid_obstacle(virtual_goal, has_theta)
-            leader_velocity_vector =  self.leader.velocity_vector
+            self.leader.approach_goal_avoid_obstacle(goal_pose, has_theta)
             ##Control followers
             for i in follower_ids: 
                 formation_position = self.get_formation_position(i, False)
                 velocity_vector = self.__get_follower_velocity_vector(self.robots[i-1],
-                                                                      formation_position)
+                                                                      formation_position,
+                                                                      'leader_reaching_goal')
                 virtual_goal = Pose2D(self.robots[i-1].robot_pose.x + velocity_vector.x, 
                                     self.robots[i-1].robot_pose.y + velocity_vector.y, 0)
                 self.robots[i-1].approach_goal_avoid_obstacle(virtual_goal, False)
@@ -102,21 +97,23 @@ class Turtlebot3_formation_drive():
                     continue 
                 
                 velocity_vector = self.__get_follower_velocity_vector(self.robots[i-1],
-                                                        follower_poses[i-1])
+                                                        follower_poses[i-1], 'leader_reached_goal')
                 virtual_goal = Pose2D(self.robots[i-1].robot_pose.x + velocity_vector.x, 
                                     self.robots[i-1].robot_pose.y + velocity_vector.y, 
                                     self.leader.robot_pose.theta)
                 self.robots[i-1].approach_goal_avoid_obstacle(virtual_goal, has_theta)
             self.rate.sleep()
 
-    def __get_follower_velocity_vector(self, robot, formation_position):
+    def __get_follower_velocity_vector(self, robot, formation_position, mode):
         '''Determine velocity vector for a follower'''
         #maintaining formation vector
         mf_vector = robot.get_move_to_goal_vector(formation_position)
-
-        return get_constrained_vector(add_vector(mul_vector(self.leader.velocity_vector, 2), 
-                                                 mf_vector), 
-                                      self.max_velocity_norm)
+        if mode == 'leader_reached_goal':
+            velocity_vector = mf_vector
+        else:
+            velocity_vector = add_vector(mul_vector(self.leader.velocity_vector, 0.5), mul_vector(mf_vector, 0.5))
+        return velocity_vector 
+                                    
   
 
     

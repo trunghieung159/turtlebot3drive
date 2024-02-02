@@ -2,7 +2,7 @@
 import rospy
 import sys
 from geometry_msgs.msg import *
-from Turtlebot3drive.turtlebot3drive import Turtlebot3_drive 
+from turtlebot3_drive.turtlebot3_drive import Turtlebot3_drive, standardlize_angle 
 ## pose2pose robot drive script 
 ## RUN : rosrun turtlebot3drive pose2pose.py [x] [y] [theta] 
 ## [x] [y] [theta] is goal pose, theta is optional 
@@ -22,8 +22,9 @@ if __name__ == '__main__':
                 goal = Pose2D(float(argv[1]), float(argv[2]), None)
                 has_theta = False
             else:
-                print("target (x, y, theta): ", argv[1], argv[2], argv[3])
-                goal = Pose2D(float(argv[1]), float(argv[2]), float(argv[3]))
+                theta = standardlize_angle(float(argv[3]))
+                print("target (x, y, theta): ", argv[1], argv[2], theta)
+                goal = Pose2D(float(argv[1]), float(argv[2]), theta)
                 has_theta = True 
             turtlebot3.pose_to_pose(goal, has_theta, True)
             print("ok")

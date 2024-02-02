@@ -2,9 +2,7 @@
 import rospy
 import sys
 from geometry_msgs.msg import *
-from Turtlebot3drive.turtlebot3drive import Turtlebot3_drive 
-from Turtlebot3_formation_drive.turtlebot3_formation_drive import Turtlebot3_formation_drive 
-
+from turtlebot3_drive.formation_turtlebot3 import Formation_turtlebot3
 
 ##drive robots in V-shaped formation 
 if __name__ == '__main__':
@@ -14,7 +12,7 @@ if __name__ == '__main__':
             print("Not enough parameter")
             pass
         else:
-            turtlebot3_formation = Turtlebot3_formation_drive(10, 3)
+            turtlebot3_formation = Formation_turtlebot3(10, 3)
             ##wait the odometry 
             rospy.sleep(1)
             if len(argv) == 3: 
